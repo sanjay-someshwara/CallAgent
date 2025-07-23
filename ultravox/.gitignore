@@ -7,7 +7,7 @@ wandb/
 *.parquet
 
 artifacts/
-
+user_audio_segments/
 output_audio_processor/
 output_tokenizer/
 

@@ -38,3 +38,30 @@
         git clone https://github.com/fixie-ai/ultravox.git
         cd ultravox
         just install
+
+### Mac
+    Install Just:
+        /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+        brew update
+        brew install just
+
+    Install Python:
+        brew install xz
+        brew install pyenv
+        pyenv init
+        pyenv install 3.11
+        pyenv global 3.11
+    
+    Create venv
+        python -m venv venv
+        source venv/bin/activate
+
+    Clone and Setup:
+        git clone https://github.com/fixie-ai/ultravox.git
+        cd ultravox
+        just install
+
+### For Tensor Issues
+    rm -rf ~/.cache/huggingface/hub
+    pip cache purge
+    restart the terminal
