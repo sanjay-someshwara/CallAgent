@@ -1,0 +1,41 @@
+model_type: "ultravox"
+text_model: "meta-llama/Llama-3-8B-Instruct"
+audio_model: "openai/whisper-medium"
+
+val_sets:
+  - name: covost2-en-de
+  - name: covost2-zh-en
+  - name: peoplespeech-clean-transcription
+
+eval_sets:
+  - name: covost2-en-de
+  - name: covost2-en-zh
+  - name: covost2-es-en
+  - name: covost2-zh-en
+  - name: librispeech-clean-transcription
+  - name: librispeech-other-transcription
+  - name: commonvoice-en-transcription
+  - name: commonvoice-es-transcription
+  - name: commonvoice-ru-transcription
+  
+eval_dataset_args:
+  max_samples: 2000
+
+optimizer: "adamw_torch" 
+lr: 2.e-3
+lr_scheduler: "cosine_with_min_lr"
+lr_scheduler_kwargs: {"min_lr_rate": 0.1}
+lr_warmup_steps: 1000
+
+batch_size: 4
+grad_accum_steps: 1
+max_steps: 10_000
+
+val_steps: 0.05
+save_steps: 0.25
+logging_steps: 100
+
+data_type: "bfloat16"
+report_logs_to: ["tensorboard", "wandb"]
+
+eval_batch_size: 60

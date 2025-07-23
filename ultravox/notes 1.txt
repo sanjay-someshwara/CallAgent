@@ -1,0 +1,17 @@
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+brew update
+brew install just
+
+brew install xz
+brew install pyenv
+pyenv init
+pyenv install 3.11
+pyenv global 3.11
+
+# Optional
+pyenv shell 3.11
+
+for tensor issue
+rm -rf ~/.cache/huggingface/hub
+pip cache purge
+restart the terminal
