@@ -33,8 +33,7 @@ MODEL_PATH = "fixie-ai/ultravox-v0_5-llama-3_2-1b"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DATA_TYPE = "bfloat16" if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else "float16"
 
-# WHISPER_MODEL_ID = "openai/whisper-tiny"
-WHISPER_MODEL_ID = "openai/whisper-medium"
+WHISPER_MODEL_ID = "openai/whisper-tiny"
 
 WHISPER_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 WHISPER_DTYPE = torch.float16 if WHISPER_DEVICE == "cuda" else torch.float32
@@ -112,21 +111,15 @@ class LLMWorker(QThread):
                 messages_for_sample = []
                 for i, msg in enumerate(current_messages):
                     if msg.get("role") == "user" and msg.get("content") == "<|audio|>" and audio_data is None:
-                        # If audio_data is None, and we encounter <|audio|>, it means it was a placeholder for
-                        # a previous attempt, so we might want to clean it up or ensure it's handled.
-                        # For now, let's ensure only one <|audio|> is used when audio_data is present.
                         pass
                     else:
                         messages_for_sample.append(msg)
                 
-                # Special handling for when audio_data is present: ensure <|audio|> is the *last* content of the *last* user message
                 if audio_data is not None:
                     if not messages_for_sample or messages_for_sample[-1].get("role") != "user":
                         messages_for_sample.append({"role": "user", "content": "<|audio|>"})
                     elif "<|audio|>" not in messages_for_sample[-1]["content"]:
                         messages_for_sample[-1]["content"] += " <|audio|>"
-                    # If it's already there, do nothing.
-
                 if audio_data is not None:
                     sample = datasets.VoiceSample(
                         messages=messages_for_sample, 
@@ -140,29 +133,28 @@ class LLMWorker(QThread):
                 self.current_llm_response = ""
                 try:
                     stream_generator = self.inference_pipeline.infer_stream(sample)
-
+                    full_response = ""
                     for chunk in stream_generator:
                         if interrupt_event.is_set():
                             break 
                         if isinstance(chunk, base.InferenceChunk):
                             text_chunk = chunk.text
                             if text_chunk:
-                                self.current_llm_response += text_chunk
-                                self.llm_chunk_received.emit(text_chunk)
+                                full_response += text_chunk
                         elif isinstance(chunk, base.InferenceStats):
                             if hasattr(chunk, "input_token_len") and hasattr(chunk, "output_token_len"):
                                 print(f"LLM Inference Stats: Input Tokens: {chunk.input_token_len}, Output Tokens: {chunk.output_token_len}")
                             else:
                                 print("LLM Inference Stats: (Token info unavailable)")
-
                     if not interrupt_event.is_set():
+                        self.current_llm_response = full_response
+                        self.llm_chunk_received.emit(full_response)
                         self.llm_finished.emit() 
                     else:
                         self.inference_pipeline.update_conversation(
                             past_messages=messages_for_sample, # Keep current messages as base
                             past_key_values=None 
                         )
-
                 except Exception as e:
                     error_msg = f"LLM Inference Error: {e}"
                     self.status_updated.emit(f"AI Error: {e}")
@@ -251,19 +243,6 @@ class PhoneCallApp(QMainWindow):
         self.conversation_display.setFont(font_conv)
         main_layout.addWidget(self.conversation_display)
 
-        input_frame = QHBoxLayout()
-        self.user_input_entry = QLineEdit()
-        font_input = QFont()
-        font_input.setPointSize(10)
-        self.user_input_entry.setFont(font_input)
-        self.user_input_entry.returnPressed.connect(self.send_text_message)
-        input_frame.addWidget(self.user_input_entry)
-
-        self.send_button = QPushButton("Send Text")
-        self.send_button.clicked.connect(self.send_text_message)
-        input_frame.addWidget(self.send_button)
-        main_layout.addLayout(input_frame)
-
         control_frame = QHBoxLayout()
         self.start_call_button = QPushButton("Start Call")
         self.start_call_button.clicked.connect(self.start_call)
@@ -309,24 +288,14 @@ class PhoneCallApp(QMainWindow):
 
     @pyqtSlot(str)
     def handle_llm_chunk(self, chunk):
-        self.current_llm_response += chunk
+        self.current_llm_response = chunk
         text_to_display = self.current_llm_response
-
-        if self.llm_cursor_position is None:
-            cursor = self.conversation_display.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            self.llm_cursor_position = cursor.position()  
-            cursor.insertHtml(f"<b style='color:purple;'>AI:</b> {text_to_display}")
-            self.conversation_display.setTextCursor(cursor)
-        else:
-            cursor = self.conversation_display.textCursor()
-            cursor.setPosition(self.llm_cursor_position)
-            cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
-            cursor.removeSelectedText()
-            cursor.insertHtml(f"<b style='color:purple;'>AI:</b> {text_to_display}")
-            self.conversation_display.setTextCursor(cursor)
-
+        cursor = self.conversation_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertHtml(f"<b style='color:purple;'>AI:</b> {text_to_display}<br>")
+        self.conversation_display.setTextCursor(cursor)
         self.conversation_display.ensureCursorVisible()
+        self.llm_cursor_position = None
 
     @pyqtSlot(str)
     def handle_llm_error(self, error_msg):
@@ -334,13 +303,9 @@ class PhoneCallApp(QMainWindow):
         self.update_status("Error from AI. Resetting conversation. Please try again.")
         self.current_llm_response = ""
         self.llm_cursor_position = None
-        self.user_input_entry.setEnabled(True)
-        self.send_button.setEnabled(True)
-        
         # Reset chat history and inform LLM worker to reset its internal state
         self.chat_history_messages = [{"role": "system", "content": "You are a helpful AI assistant. Respond concisely in a conversational manner."}]
         llm_input_q.put({"messages": self.chat_history_messages.copy(), "audio": None, "full_conversation_reset": True})
-
         # Clear audio buffer and reset flags
         self.audio_buffer = np.array([], dtype=np.float32)
         self.silence_start_time = None
@@ -361,12 +326,9 @@ class PhoneCallApp(QMainWindow):
             self.conversation_display.setTextCursor(cursor)
         elif interrupt_event.is_set():
             self.append_to_conversation("System", "AI generation interrupted.", color="orange")
-        
         self.update_status("Listening...")
         self.llm_cursor_position = None
         self.current_llm_response = ""
-        self.user_input_entry.setEnabled(True)
-        self.send_button.setEnabled(True)
 
     def start_call(self):
         global is_recording_active
@@ -487,21 +449,17 @@ class PhoneCallApp(QMainWindow):
             print(f"Error in process_audio_chunks: {e}")
             self.update_status(f"Audio processing error: {e}")
 
-    def process_user_turn(self, text_input: Optional[str] = None):
+    def process_user_turn(self):
         self.current_llm_response = ""
         self.llm_cursor_position = None
-
-        if text_input:
-            user_message = {"role": "user", "content": text_input}
-            self.append_to_conversation("You (Text)", text_input, color="darkgreen")
-            self.chat_history_messages.append(user_message)
-            
-            # For text input, no audio data is sent.
-            llm_input_q.put({"messages": self.chat_history_messages.copy(), "audio": None})
-
-        elif len(self.audio_buffer) > 0:
+        if len(self.audio_buffer) > 0:
             audio_for_llm = self.audio_buffer.copy()
-
+            # Check volume before ASR/LLM
+            volume = np.sqrt(np.mean(audio_for_llm ** 2))
+            if volume <= VAD_THRESHOLD:
+                self.append_to_conversation("System", "Voice too low, please speak louder.", color="orange")
+                self.update_status("Voice too low, please speak louder.")
+                return
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = os.path.join(AUDIO_SAVE_DIR, f"user_audio_{timestamp}.wav")
             try:
@@ -509,24 +467,20 @@ class PhoneCallApp(QMainWindow):
                 self.append_to_conversation("System", f"Saved audio segment.", color="gray")
             except Exception as e:
                 self.append_to_conversation("System", f"Error saving audio: {e}", color="red")
-
             transcribed_text = ""
             asr_success = False
             if self.whisper_model and self.whisper_processor:
                 try:
-                    # Ensure audio is 1D
                     audio_tensor = torch.tensor(audio_for_llm, dtype=torch.float32)
                     if audio_tensor.ndim > 1:
                         audio_tensor = audio_tensor.squeeze()
                     if len(audio_tensor) == 0:
                         raise ValueError("Empty audio tensor.")
-
                     input_features = self.whisper_processor(
-                        audio_tensor.numpy(),  # Whisper expects NumPy input here
+                        audio_tensor.numpy(),
                         sampling_rate=SAMPLE_RATE,
                         return_tensors="pt"
                     ).input_features.to(WHISPER_DTYPE).to(WHISPER_DEVICE)
-
                     predicted_ids = self.whisper_model.generate(input_features)
                     transcribed_text = self.whisper_processor.batch_decode(
                         predicted_ids, skip_special_tokens=True
@@ -537,46 +491,22 @@ class PhoneCallApp(QMainWindow):
                     print(f"Error during ASR transcription: {e}")
                     self.append_to_conversation("You (ASR)", f"[Transcription Error: {e}]", color="red")
                     transcribed_text = "[Audio input received, but transcription failed]"
-
             else:
                 self.append_to_conversation("You (ASR)", "[Whisper model not loaded]", color="red")
-                transcribed_text = "[Audio input received, Whisper not available]" # Descriptive placeholder
-
-            self.append_to_conversation("You (Voice)", "[Audio Input Sent]", color="darkgreen") 
-
+                transcribed_text = "[Audio input received, Whisper not available]"
+            self.append_to_conversation("You (Voice)", "[Audio Input Sent]", color="darkgreen")
             messages_for_llm_worker = self.chat_history_messages.copy()
-            
-            # Append the user message with the transcribed text (or placeholder)
-            # and explicitly add the <|audio|> token if actual audio is being sent.
             user_content = transcribed_text
-            if asr_success:
-                 # If ASR was successful, append the transcription
-                messages_for_llm_worker.append({"role": "user", "content": user_content + " <|audio|>"})
-            else:
-                # If ASR failed, use the placeholder but still include <|audio|> for the model
-                # assuming the model still expects audio when the `audio` field is populated.
-                messages_for_llm_worker.append({"role": "user", "content": user_content + " <|audio|>"})
-            
+            messages_for_llm_worker.append({"role": "user", "content": user_content + " <|audio|>"})
             llm_input_q.put({
                 "audio": audio_for_llm,
                 "sampling_rate": SAMPLE_RATE,
                 "messages": messages_for_llm_worker
             })
-            
-            # Update chat history displayed in the GUI with the (potentially failed) transcription
             self.chat_history_messages.append({"role": "user", "content": transcribed_text})
         else:
-            self.update_status("No audio or text input detected.")
+            self.update_status("No audio input detected.")
             return
-
-        self.user_input_entry.setEnabled(False)
-        self.send_button.setEnabled(False)
-
-    def send_text_message(self):
-        message = self.user_input_entry.text().strip()
-        if message:
-            self.user_input_entry.clear()
-            self.process_user_turn(text_input=message)
 
     def closeEvent(self, event):
         reply = QMessageBox.question(self, 'Message',
