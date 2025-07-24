@@ -7,8 +7,6 @@ import numpy as np
 from ultravox.inference.ultravox_infer import UltravoxInference
 from ultravox import data as datasets # Need to import the datasets module for VoiceSample
 
-os.environ["HF_TOKEN"] = "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" 
-
 # --- Configuration ---
 MODEL_PATH = "fixie-ai/ultravox-v0_5-llama-3_2-1b"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -21,11 +19,11 @@ inference_pipeline = UltravoxInference(
     model_path=MODEL_PATH,
     device=DEVICE,
     data_type=DATA_TYPE,
-    conversation_mode=False # Set to True to enable conversation history
+    conversation_mode=False,
+    audio_processor_id="openai/whisper-large-v2"
 )
 
 print("Model loaded successfully!")
-
 # --- Inference Examples ---
 
 # Example 1: Text-only input

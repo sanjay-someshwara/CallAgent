@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Mic, StopCircle, Disc } from 'lucide-react';
+import { Mic, StopCircle, Disc, Settings } from 'lucide-react';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { toBlobURL, fetchFile } from '@ffmpeg/util';
 
@@ -9,6 +9,13 @@ const UltravoxAgent: React.FC = () => {
   const [message, setMessage] = useState<string>('Loading...');
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [transcription, setTranscription] = useState<string | null>(null);
+  const [aiResponse, setAiResponse] = useState<string | null>(null);
+  const [models, setModels] = useState<string[]>([]);
+  const [selectedModel, setSelectedModel] = useState<string>('openai/whisper-large-v3-turbo');
+  const [isLoadingModels, setIsLoadingModels] = useState<boolean>(true);
+  const [isChangingModel, setIsChangingModel] = useState<boolean>(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -22,13 +29,64 @@ const UltravoxAgent: React.FC = () => {
   const isCallLiveRef = useRef<boolean>(false);
 
   const SILENCE_THRESHOLD = 0.08;
-  const SILENCE_DURATION = 1500;
   const ANALYSER_FFT_SIZE = 512;
+
+  // Fetch available models
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const response = await fetch('http://localhost:8002/models');
+        const data = await response.json();
+        setModels(data.models);
+        setIsLoadingModels(false);
+      } catch (error) {
+        console.error('Error fetching models:', error);
+        setMessage('Error loading models. Using default model.');
+        setIsLoadingModels(false);
+      }
+    };
+
+    fetchModels();
+  }, []);
+
+  // Set model function
+  const setModel = async (modelName: string) => {
+    setIsChangingModel(true);
+    try {
+      const response = await fetch('http://localhost:8002/setmodel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ model: modelName }),
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setSelectedModel(modelName);
+        setMessage(result.message || `Model changed to: ${modelName}`);
+      } else {
+        setMessage('Error changing model. Please try again.');
+      }
+    } catch (error) {
+      console.error('Error setting model:', error);
+      setMessage('Error changing model. Please try again.');
+    } finally {
+      setIsChangingModel(false);
+    }
+  };
+
+  // Handle model selection change
+  const handleModelChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
+    const newModel = event.target.value;
+    setModel(newModel);
+  };
 
   useEffect(() => {
     async function loadFFmpeg() {
       setMessage('Loading FFmpeg...');
       const ffmpegInstance = new FFmpeg();
+      // ffmpegInstance.on('log', ({ message }) => setMessage(message));
       const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
       await ffmpegInstance.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
@@ -148,29 +206,83 @@ const UltravoxAgent: React.FC = () => {
 
       const formData = new FormData();
       formData.append('file', wavBlob, 'recorded_audio.wav');
-      const response = await fetch('http://localhost:8000/transcribe', { method: 'POST', body: formData });
-
-      const transcription = await response.json();
-      console.log('Transcription:', transcription);
-      
-      if (transcription.error) {
-        setMessage(`Error: ${transcription.error}`);
+      // Use /inference endpoint and include sessionId as query param
+      const url = `http://localhost:8002/inference${sessionId ? `?session_id=${sessionId}` : ''}`;
+      const response = await fetch(url, { method: 'POST', body: formData });
+      const result = await response.json();
+      if (result.error) {
+        setMessage(`Error: ${result.error}`);
+        setTranscription(null);
+        setAiResponse(null);
       } else {
-        setMessage(`Transcription (${transcription.model_used}): ${transcription.transcription}`);
+        setSessionId(result.session_id);
+        setTranscription(result.transcription);
+        setAiResponse(result.ultravox_response);
+        setMessage('Response received from Ultravox!');
       }
-
       await ffmpeg.deleteFile(inputFileName);
       await ffmpeg.deleteFile(outputFileName);
     } catch (error) {
       console.error('Conversion/Upload Error:', error);
       setMessage('Error processing audio. Please try again.');
+      setTranscription(null);
+      setAiResponse(null);
     }
   };
 
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-4 font-sans rounded-lg">
       <h1 className="text-4xl font-extrabold text-blue-800 mb-8 drop-shadow-md">Ultravox Agent</h1>
+      
+      {/* Model Selection */}
+      <div className="mb-6 p-4 bg-white rounded-lg shadow-md w-full max-w-md">
+        <div className="flex items-center mb-3">
+          <Settings className="h-5 w-5 text-gray-600 mr-2" />
+          <label htmlFor="model-select" className="text-sm font-medium text-gray-700">
+            Whisper Model
+          </label>
+        </div>
+        <select
+          id="model-select"
+          value={selectedModel}
+          onChange={handleModelChange}
+          disabled={isLoadingModels || isChangingModel}
+          className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 text-black"
+        >
+          {isLoadingModels ? (
+            <option className="text-black">Loading models...</option>
+          ) : (
+            models.map((model) => (
+              <option key={model} value={model} className="text-black">
+                {model.replace('openai/whisper-', '')}
+              </option>
+            ))
+          )}
+        </select>
+        {isChangingModel && (
+          <div className="flex items-center justify-center mt-2">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+            <span className="ml-2 text-sm text-gray-600">Changing model...</span>
+          </div>
+        )}
+        {!isLoadingModels && (
+          <p className="text-xs text-gray-500 mt-1">
+            Current: {selectedModel.replace('openai/whisper-', '')}
+          </p>
+        )}
+      </div>
+
       <p className="text-gray-700 text-lg mb-6 text-center">{message}</p>
+      {transcription && (
+        <div className="mb-4 p-4 bg-white rounded shadow w-full max-w-xl">
+          <strong>Transcription:</strong> {transcription}
+        </div>
+      )}
+      {aiResponse && (
+        <div className="mb-4 p-4 bg-white rounded shadow w-full max-w-xl text-black">
+          <strong>Ultravox Response:</strong> {aiResponse}
+        </div>
+      )}
       
       <div className="flex space-x-6 mb-8">
         <button onClick={startCall} disabled={isRecording || !ffmpeg} className="px-8 py-4 text-lg font-semibold rounded-full bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed">
